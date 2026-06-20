@@ -113,7 +113,7 @@ final class ALVRViewController: UIViewController {
     }
 
     @objc private func pollEvents() {
-        var event = AlvrEvent()
+        var event = pvr_make_empty_event()
         while pvr_ios_poll_event(&event) {
             switch event.tag {
             case ALVR_EVENT_STREAMING_STARTED:

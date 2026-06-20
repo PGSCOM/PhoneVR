@@ -73,7 +73,7 @@ final class VRRenderer: NSObject {
         encoder.setRenderPipelineState(pipeline)
         encoder.setVertexBuffer(vertexBuffer, offset: 0, index: 0)
 
-        var params = DistortionParams(k1: distortionK1, k2: distortionK2, padding: (0, 0))
+        var params = DistortionParams(k1: distortionK1, k2: distortionK2)
 
         encoder.setFragmentTexture(videoTexture, index: 0)
         encoder.setFragmentBytes(&params, length: MemoryLayout<DistortionParams>.stride, index: 0)
@@ -147,7 +147,8 @@ final class VRRenderer: NSObject {
 private struct DistortionParams {
     var k1: Float
     var k2: Float
-    var padding: (Float, Float)
+    var pad0: Float = 0
+    var pad1: Float = 0
 }
 
 private struct EyeUniforms {

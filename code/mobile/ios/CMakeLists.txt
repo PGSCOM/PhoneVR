@@ -63,6 +63,9 @@ set_target_properties(PhoneVR PROPERTIES
     XCODE_ATTRIBUTE_ENABLE_BITCODE              "NO"
 )
 
+# Ensure the Swift target can resolve #import "AlvrBridge.h" in the bridging header.
+target_include_directories(PhoneVR PRIVATE ${IOS_SRC_DIR})
+
 target_link_libraries(PhoneVR PRIVATE
     pvr_bridge
     ${ALVR_STATIC_LIB}

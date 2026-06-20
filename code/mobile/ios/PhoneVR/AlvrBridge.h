@@ -2,7 +2,16 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <string.h>
 #include "alvr_client_core.h"
+
+/* Zero-initialise an AlvrEvent safely (Swift cannot synthesize init() for
+   structs that contain a C union field). */
+static inline AlvrEvent pvr_make_empty_event(void) {
+    AlvrEvent e;
+    memset(&e, 0, sizeof(e));
+    return e;
+}
 
 #ifdef __cplusplus
 extern "C" {

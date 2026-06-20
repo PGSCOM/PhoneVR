@@ -29,33 +29,30 @@ final class VideoDecoder {
         guard let sampleBuf = makeSampleBuffer(from: nal, timestampNs: timestampNs) else { return }
 
         let flags = VTDecodeFrameFlags._enableAsynchronousDecompression
-        let ctx = UnsafeMutableRawPointer(Unmanaged.passRetained(Box(timestampNs)).toOpaque())
+        // Wrap (self, timestamp) in a heap object and transfer ownership to the callback.
+        let ctx = VideoDecoderCallbackContext(decoder: self, timestampNs: timestampNs)
+        let ctxPtr = UnsafeMutableRawPointer(Unmanaged.passRetained(ctx).toOpaque())
         VTDecompressionSessionDecodeFrame(session,
                                           sampleBuffer: sampleBuf,
                                           flags: flags,
-                                          frameRefcon: ctx,
+                                          frameRefcon: ctxPtr,
                                           infoFlagsOut: nil)
     }
 
     // MARK: - Private helpers
 
     private func parseParameterSets(from nal: [UInt8]) {
-        // Split Annex-B stream on start codes (0x00 0x00 0x00 0x01 or 0x00 0x00 0x01).
         var units: [[UInt8]] = []
         var i = 0
         var start = 0
-        while i < nal.count - 3 {
+        while i + 2 < nal.count {
             if nal[i] == 0 && nal[i+1] == 0 {
                 if nal[i+2] == 1 {
                     if i > start { units.append(Array(nal[start..<i])) }
-                    start = i + 3
-                    i += 3
-                    continue
+                    start = i + 3; i += 3; continue
                 } else if i + 3 < nal.count && nal[i+2] == 0 && nal[i+3] == 1 {
                     if i > start { units.append(Array(nal[start..<i])) }
-                    start = i + 4
-                    i += 4
-                    continue
+                    start = i + 4; i += 4; continue
                 }
             }
             i += 1
@@ -67,26 +64,15 @@ final class VideoDecoder {
                 ? Int(unit[0] & 0x1F)
                 : Int((unit[0] >> 1) & 0x3F)
             if codec == ALVR_CODEC_H264 {
-                switch naluType {
-                case 7: spsData = unit
-                case 8: ppsData = unit
-                default: break
-                }
+                switch naluType { case 7: spsData = unit; case 8: ppsData = unit; default: break }
             } else {
-                switch naluType {
-                case 32: vpsData = unit  // VPS
-                case 33: spsData = unit  // SPS
-                case 34: ppsData = unit  // PPS
-                default: break
-                }
+                switch naluType { case 32: vpsData = unit; case 33: spsData = unit; case 34: ppsData = unit; default: break }
             }
         }
     }
 
     private func rebuildSession() {
-        session = nil
-        formatDesc = nil
-
+        session = nil; formatDesc = nil
         var desc: CMFormatDescription?
         var status: OSStatus
 
@@ -94,15 +80,12 @@ final class VideoDecoder {
             guard !spsData.isEmpty, !ppsData.isEmpty else { return }
             status = spsData.withUnsafeBufferPointer { spsBuf in
                 ppsData.withUnsafeBufferPointer { ppsBuf in
-                    let paramSetPtrs: [UnsafePointer<UInt8>?] = [spsBuf.baseAddress, ppsBuf.baseAddress]
-                    let paramSetSizes: [Int] = [spsData.count, ppsData.count]
+                    let ptrs: [UnsafePointer<UInt8>?] = [spsBuf.baseAddress, ppsBuf.baseAddress]
+                    let sizes: [Int] = [spsData.count, ppsData.count]
                     return CMVideoFormatDescriptionCreateFromH264ParameterSets(
-                        allocator: nil,
-                        parameterSetCount: 2,
-                        parameterSetPointers: paramSetPtrs,
-                        parameterSetSizes: paramSetSizes,
-                        nalUnitHeaderLength: 4,
-                        formatDescriptionOut: &desc)
+                        allocator: nil, parameterSetCount: 2,
+                        parameterSetPointers: ptrs, parameterSetSizes: sizes,
+                        nalUnitHeaderLength: 4, formatDescriptionOut: &desc)
                 }
             }
         } else {
@@ -110,41 +93,38 @@ final class VideoDecoder {
             status = vpsData.withUnsafeBufferPointer { vpsBuf in
                 spsData.withUnsafeBufferPointer { spsBuf in
                     ppsData.withUnsafeBufferPointer { ppsBuf in
-                        let ptrs: [UnsafePointer<UInt8>?] = [vpsBuf.baseAddress,
-                                                              spsBuf.baseAddress,
-                                                              ppsBuf.baseAddress]
+                        let ptrs: [UnsafePointer<UInt8>?] = [vpsBuf.baseAddress, spsBuf.baseAddress, ppsBuf.baseAddress]
                         let sizes: [Int] = [vpsData.count, spsData.count, ppsData.count]
                         return CMVideoFormatDescriptionCreateFromHEVCParameterSets(
-                            allocator: nil,
-                            parameterSetCount: 3,
-                            parameterSetPointers: ptrs,
-                            parameterSetSizes: sizes,
-                            nalUnitHeaderLength: 4,
-                            extensions: nil,
+                            allocator: nil, parameterSetCount: 3,
+                            parameterSetPointers: ptrs, parameterSetSizes: sizes,
+                            nalUnitHeaderLength: 4, extensions: nil,
                             formatDescriptionOut: &desc)
                     }
                 }
             }
         }
-
         guard status == noErr, let desc else { return }
         formatDesc = desc
 
         let attrs: [String: Any] = [
             kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
-            kCVPixelBufferOpenGLESCompatibilityKey as String: true,
             kCVPixelBufferMetalCompatibilityKey as String: true,
         ]
-        var callback = VTDecompressionOutputCallbackRecord(
-            decompressionOutputCallback: decompressionCallback,
-            decompressionOutputRefCon: Unmanaged.passUnretained(self).toOpaque()
-        )
+        // The self pointer is passed as decompressionOutputRefCon and retrieved in the
+        // top-level C callback below.  Using passUnretained here is safe because the
+        // session is destroyed in rebuildSession() / deinit before self could go away.
+        let selfPtr = Unmanaged.passUnretained(self).toOpaque()
+        var cbRecord = VTDecompressionOutputCallbackRecord(
+            decompressionOutputCallback: vtOutputCallback,
+            decompressionOutputRefCon: selfPtr)
+
         var newSession: VTDecompressionSession?
         VTDecompressionSessionCreate(allocator: nil,
                                      formatDescription: desc,
                                      decoderSpecification: nil,
                                      imageBufferAttributes: attrs as CFDictionary,
-                                     outputCallback: &callback,
+                                     outputCallback: &cbRecord,
                                      decompressionSessionOut: &newSession)
         session = newSession
     }
@@ -152,78 +132,77 @@ final class VideoDecoder {
     private func makeSampleBuffer(from annexBNal: [UInt8], timestampNs: UInt64) -> CMSampleBuffer? {
         guard let formatDesc else { return nil }
 
-        // Convert Annex-B to AVCC (replace start codes with 4-byte big-endian length).
+        // Convert Annex-B start codes to AVCC 4-byte length prefixes.
         var avcc = [UInt8]()
         var i = 0
         while i < annexBNal.count {
             var skip = 0
-            if i + 3 < annexBNal.count && annexBNal[i] == 0 && annexBNal[i+1] == 0 {
+            if i + 3 <= annexBNal.count && annexBNal[i] == 0 && annexBNal[i+1] == 0 {
                 if annexBNal[i+2] == 1 { skip = 3 }
-                else if i + 4 < annexBNal.count && annexBNal[i+2] == 0 && annexBNal[i+3] == 1 { skip = 4 }
+                else if i + 4 <= annexBNal.count && annexBNal[i+2] == 0 && annexBNal[i+3] == 1 { skip = 4 }
             }
             if skip > 0 {
-                // Find next start code to get NALU length.
                 var end = i + skip
-                while end < annexBNal.count - 3 {
-                    if annexBNal[end] == 0 && annexBNal[end+1] == 0 {
-                        if annexBNal[end+2] == 1 { break }
-                        if end + 3 < annexBNal.count && annexBNal[end+2] == 0 && annexBNal[end+3] == 1 { break }
-                    }
+                while end + 3 < annexBNal.count {
+                    if annexBNal[end] == 0 && annexBNal[end+1] == 0 &&
+                       (annexBNal[end+2] == 1 || (annexBNal[end+2] == 0 && end + 3 < annexBNal.count && annexBNal[end+3] == 1)) { break }
                     end += 1
                 }
                 let naluLen = end - (i + skip)
-                let be = UInt32(naluLen).bigEndian
-                withUnsafeBytes(of: be) { avcc.append(contentsOf: $0) }
+                withUnsafeBytes(of: UInt32(naluLen).bigEndian) { avcc.append(contentsOf: $0) }
                 avcc.append(contentsOf: annexBNal[(i + skip)..<end])
                 i = end
-            } else {
-                i += 1
-            }
+            } else { i += 1 }
         }
-
         guard !avcc.isEmpty else { return nil }
 
         var blockBuf: CMBlockBuffer?
-        var status = avcc.withUnsafeMutableBytes { ptr in
+        var status = avcc.withUnsafeMutableBytes { ptr -> OSStatus in
             CMBlockBufferCreateWithMemoryBlock(
-                allocator: nil,
-                memoryBlock: ptr.baseAddress,
-                blockLength: avcc.count,
-                blockAllocator: kCFAllocatorNull,
-                customBlockSource: nil,
-                offsetToData: 0,
-                dataLength: avcc.count,
-                flags: 0,
-                blockBufferOut: &blockBuf)
+                allocator: nil, memoryBlock: ptr.baseAddress,
+                blockLength: avcc.count, blockAllocator: kCFAllocatorNull,
+                customBlockSource: nil, offsetToData: 0, dataLength: avcc.count,
+                flags: 0, blockBufferOut: &blockBuf)
         }
         guard status == noErr, let blockBuf else { return nil }
 
         let pts = CMTime(value: CMTimeValue(timestampNs), timescale: 1_000_000_000)
+        var timing = CMSampleTimingInfo(duration: .invalid, presentationTimeStamp: pts, decodeTimeStamp: .invalid)
         var sampleBuf: CMSampleBuffer?
-        var timingInfo = CMSampleTimingInfo(duration: .invalid, presentationTimeStamp: pts, decodeTimeStamp: .invalid)
-        status = CMSampleBufferCreateReady(allocator: nil,
-                                          dataBuffer: blockBuf,
-                                          formatDescription: formatDesc,
-                                          sampleCount: 1,
-                                          sampleTimingEntryCount: 1,
-                                          sampleTimingArray: &timingInfo,
-                                          sampleSizeEntryCount: 0,
-                                          sampleSizeArray: nil,
-                                          sampleBufferOut: &sampleBuf)
+        status = CMSampleBufferCreateReady(allocator: nil, dataBuffer: blockBuf,
+                                           formatDescription: formatDesc,
+                                           sampleCount: 1,
+                                           sampleTimingEntryCount: 1, sampleTimingArray: &timing,
+                                           sampleSizeEntryCount: 0, sampleSizeArray: nil,
+                                           sampleBufferOut: &sampleBuf)
         return status == noErr ? sampleBuf : nil
     }
 }
 
-private let decompressionCallback: VTDecompressionOutputCallback = { refCon, frameRefCon, status, _, imageBuffer, pts, _ in
-    guard status == noErr, let imageBuffer else { return }
-    guard let refCon, let frameRefCon else { return }
+// MARK: - VideoToolbox C callback
+// Must be a top-level function (not a closure) to be used as @convention(c).
 
-    let decoder = Unmanaged<VideoDecoder>.fromOpaque(refCon).takeUnretainedValue()
-    let box = Unmanaged<Box<UInt64>>.fromOpaque(frameRefCon).takeRetainedValue()
-    decoder.onFrame?(imageBuffer, box.value)
+private final class VideoDecoderCallbackContext {
+    weak var decoder: VideoDecoder?
+    let timestampNs: UInt64
+    init(decoder: VideoDecoder, timestampNs: UInt64) {
+        self.decoder = decoder
+        self.timestampNs = timestampNs
+    }
 }
 
-private final class Box<T> {
-    let value: T
-    init(_ value: T) { self.value = value }
+private func vtOutputCallback(
+    refCon: UnsafeMutableRawPointer?,
+    frameRefCon: UnsafeMutableRawPointer?,
+    status: OSStatus,
+    _: VTDecodeInfoFlags,
+    imageBuffer: CVImageBuffer?,
+    _: CMTime,
+    _: CMTime
+) {
+    guard status == noErr, let imageBuffer else { return }
+    guard let frameRefCon else { return }
+    // frameRefCon is a +1 retained VideoDecoderCallbackContext.
+    let ctx = Unmanaged<VideoDecoderCallbackContext>.fromOpaque(frameRefCon).takeRetainedValue()
+    ctx.decoder?.onFrame?(imageBuffer, ctx.timestampNs)
 }
