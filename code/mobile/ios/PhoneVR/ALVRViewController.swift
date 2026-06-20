@@ -15,8 +15,10 @@ final class ALVRViewController: UIViewController {
     private var headTracker = HeadTracker()
 
     private var eventTimer: CADisplayLink?
-    private var trackingTimer: Timer?
+    private var trackingTimer: DispatchSourceTimer?
+    private let trackingQueue = DispatchQueue(label: "com.phonevr.tracking", qos: .userInteractive)
     private var isStreaming = false
+    private var hudPollCounter = 0
 
     // Updated from ALVR StreamingStarted event.
     private var currentFov = (left: Float(-45 * Float.pi / 180),
@@ -51,6 +53,8 @@ final class ALVRViewController: UIViewController {
     }
 
     deinit {
+        trackingTimer?.cancel()
+        eventTimer?.invalidate()
         pvr_ios_destroy()
         headTracker.stop()
         UIApplication.shared.isIdleTimerDisabled = false
@@ -211,9 +215,13 @@ final class ALVRViewController: UIViewController {
     // MARK: - Tracking loop (sends head pose to PC ~200 Hz)
 
     private func startTrackingLoop() {
-        trackingTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 200.0, repeats: true) { [weak self] _ in
-            self?.sendTracking()
-        }
+        // Runs off the main thread so the 200 Hz tracking cadence (and its FFI
+        // calls into ALVR) never starves the main runloop / event poll.
+        let timer = DispatchSource.makeTimerSource(queue: trackingQueue)
+        timer.schedule(deadline: .now(), repeating: 1.0 / 200.0, leeway: .milliseconds(1))
+        timer.setEventHandler { [weak self] in self?.sendTracking() }
+        timer.resume()
+        trackingTimer = timer
     }
 
     private func sendTracking() {
@@ -234,5 +242,16 @@ extension ALVRViewController: MTKViewDelegate {
 
     func draw(in view: MTKView) {
         renderer?.render(in: view)
+
+        // Refresh the connection status overlay ~4x/sec from ALVR's HUD message.
+        // Driven by MTKView's own display link so it works even if the event
+        // CADisplayLink is momentarily starved.
+        if !isStreaming {
+            hudPollCounter += 1
+            if hudPollCounter >= 30 {
+                hudPollCounter = 0
+                updateStatus(streaming: false)
+            }
+        }
     }
 }

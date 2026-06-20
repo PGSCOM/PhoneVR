@@ -5,6 +5,14 @@ import simd
 /// in the ALVR coordinate system (right-hand, Y-up, looking into -Z).
 final class HeadTracker {
     private let motionManager = CMMotionManager()
+    // Dedicated queue so 200 Hz IMU callbacks never run on (and starve) the main thread.
+    private let motionQueue: OperationQueue = {
+        let q = OperationQueue()
+        q.name = "com.phonevr.motion"
+        q.maxConcurrentOperationCount = 1
+        q.qualityOfService = .userInteractive
+        return q
+    }()
 
     // Protected by the lock below; read from any thread.
     private let lock = NSLock()
@@ -24,7 +32,7 @@ final class HeadTracker {
         guard motionManager.isDeviceMotionAvailable else { return }
         motionManager.deviceMotionUpdateInterval = 1.0 / 200.0
         motionManager.startDeviceMotionUpdates(using: .xArbitraryZVertical,
-                                               to: .main) { [weak self] motion, _ in
+                                               to: motionQueue) { [weak self] motion, _ in
             guard let self, let m = motion else { return }
             self.update(motion: m)
         }
