@@ -54,7 +54,6 @@ set_target_properties(PhoneVR PROPERTIES
     XCODE_ATTRIBUTE_IPHONEOS_DEPLOYMENT_TARGET   "13.0"
     XCODE_ATTRIBUTE_SWIFT_VERSION                "5.0"
     XCODE_ATTRIBUTE_SWIFT_OBJC_BRIDGING_HEADER   "${IOS_SRC_DIR}/PhoneVR-Bridging-Header.h"
-    XCODE_ATTRIBUTE_ASSETCATALOG_COMPILER_APPICON_NAME "AppIcon"
     XCODE_ATTRIBUTE_ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES YES
 
     # ── No code signing (unsigned .ipa) ───────────────────────────────────────
