@@ -28,7 +28,7 @@ final class VideoDecoder {
         guard let session else { return }
         guard let sampleBuf = makeSampleBuffer(from: nal, timestampNs: timestampNs) else { return }
 
-        let flags = VTDecodeFrameFlags._enableAsynchronousDecompression
+        let flags: VTDecodeFrameFlags = []
         // Wrap (self, timestamp) in a heap object and transfer ownership to the callback.
         let ctx = VideoDecoderCallbackContext(decoder: self, timestampNs: timestampNs)
         let ctxPtr = UnsafeMutableRawPointer(Unmanaged.passRetained(ctx).toOpaque())
@@ -80,7 +80,7 @@ final class VideoDecoder {
             guard !spsData.isEmpty, !ppsData.isEmpty else { return }
             status = spsData.withUnsafeBufferPointer { spsBuf in
                 ppsData.withUnsafeBufferPointer { ppsBuf in
-                    let ptrs: [UnsafePointer<UInt8>?] = [spsBuf.baseAddress, ppsBuf.baseAddress]
+                    let ptrs: [UnsafePointer<UInt8>] = [spsBuf.baseAddress!, ppsBuf.baseAddress!]
                     let sizes: [Int] = [spsData.count, ppsData.count]
                     return CMVideoFormatDescriptionCreateFromH264ParameterSets(
                         allocator: nil, parameterSetCount: 2,
@@ -93,7 +93,7 @@ final class VideoDecoder {
             status = vpsData.withUnsafeBufferPointer { vpsBuf in
                 spsData.withUnsafeBufferPointer { spsBuf in
                     ppsData.withUnsafeBufferPointer { ppsBuf in
-                        let ptrs: [UnsafePointer<UInt8>?] = [vpsBuf.baseAddress, spsBuf.baseAddress, ppsBuf.baseAddress]
+                        let ptrs: [UnsafePointer<UInt8>] = [vpsBuf.baseAddress!, spsBuf.baseAddress!, ppsBuf.baseAddress!]
                         let sizes: [Int] = [vpsData.count, spsData.count, ppsData.count]
                         return CMVideoFormatDescriptionCreateFromHEVCParameterSets(
                             allocator: nil, parameterSetCount: 3,

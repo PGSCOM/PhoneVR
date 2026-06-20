@@ -18,10 +18,10 @@ final class ALVRViewController: UIViewController {
     private var isStreaming = false
 
     // Updated from ALVR StreamingStarted event.
-    private var currentFov = (left: Float(-45 * .pi / 180),
-                              right: Float(45 * .pi / 180),
-                              up: Float(45 * .pi / 180),
-                              down: Float(-45 * .pi / 180))
+    private var currentFov = (left: Float(-45 * Float.pi / 180),
+                              right: Float(45 * Float.pi / 180),
+                              up: Float(45 * Float.pi / 180),
+                              down: Float(-45 * Float.pi / 180))
 
     // MARK: - Lifecycle
 
