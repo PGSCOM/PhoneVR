@@ -144,6 +144,8 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_ALLOWED=NO \
             ENABLE_BITCODE=NO \
+            SKIP_INSTALL=NO \
+            INSTALL_PATH=/Applications \
             archive 2>&1 | tee "$LOGFILE"
 
           test -d "$ARCHIVE" || {
