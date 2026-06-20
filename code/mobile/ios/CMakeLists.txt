@@ -61,6 +61,10 @@ set_target_properties(PhoneVR PROPERTIES
     XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED       "NO"
     XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED        "NO"
     XCODE_ATTRIBUTE_ENABLE_BITCODE              "NO"
+
+    # Multicast/broadcast entitlement for ALVR's LAN discovery. Only takes
+    # effect when re-signed with a provisioning profile that has the capability.
+    XCODE_ATTRIBUTE_CODE_SIGN_ENTITLEMENTS      "${IOS_SRC_DIR}/PhoneVR.entitlements"
 )
 
 # Ensure the Swift target can resolve #import "AlvrBridge.h" in the bridging header.

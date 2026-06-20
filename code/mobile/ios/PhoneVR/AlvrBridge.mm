@@ -94,3 +94,7 @@ void pvr_ios_send_battery(float level, bool is_plugged) {
 uint64_t pvr_ios_head_id(void) {
     return HEAD_ID;
 }
+
+uint64_t pvr_ios_hud_message(char *out_buf) {
+    return alvr_hud_message(out_buf);
+}

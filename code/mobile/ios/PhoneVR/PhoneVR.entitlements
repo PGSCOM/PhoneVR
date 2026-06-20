@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+      ALVR discovers the PC by sending a UDP broadcast to 255.255.255.255.
+      Since iOS 14 the OS blocks broadcast/multicast unless the app carries this
+      entitlement. It is Apple-gated: a real provisioning profile with the
+      "Multicast Networking" capability is required for it to take effect. A free
+      / sideload signature cannot grant it — in that case broadcast discovery
+      will not work and you must add the iPhone's IP manually on the PC side
+      (the app still accepts the server-initiated unicast connection).
+    -->
+    <key>com.apple.developer.networking.multicast</key>
+    <true/>
+</dict>
+</plist>

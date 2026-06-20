@@ -9,6 +9,7 @@ final class ALVRViewController: UIViewController {
     // MARK: - State
 
     private var mtkView: MTKView!
+    private var statusLabel: UILabel!
     private var renderer: VRRenderer?
     private var decoder: VideoDecoder?
     private var headTracker = HeadTracker()
@@ -29,6 +30,7 @@ final class ALVRViewController: UIViewController {
         super.viewDidLoad()
         view.backgroundColor = .black
         setupMetal()
+        setupStatusLabel()
         setupDecoder()
         setupALVR()
         headTracker.start()
@@ -75,6 +77,35 @@ final class ALVRViewController: UIViewController {
         mtkView.enableSetNeedsDisplay = false
     }
 
+    private func setupStatusLabel() {
+        statusLabel = UILabel(frame: view.bounds)
+        statusLabel.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        statusLabel.textAlignment = .center
+        statusLabel.numberOfLines = 0
+        statusLabel.textColor = .white
+        statusLabel.font = .systemFont(ofSize: 22, weight: .medium)
+        statusLabel.text = "Starting…"
+        view.addSubview(statusLabel)
+    }
+
+    /// Reads ALVR's current HUD/status string (e.g. "Trying to connect…").
+    private func currentHudMessage() -> String {
+        let len = pvr_ios_hud_message(nil)
+        guard len > 0 else { return "" }
+        var buf = [CChar](repeating: 0, count: Int(len) + 1)
+        _ = pvr_ios_hud_message(&buf)
+        return String(cString: buf)
+    }
+
+    /// Shows the status overlay (with the latest HUD text) until video streams.
+    private func updateStatus(streaming: Bool) {
+        statusLabel.isHidden = streaming
+        if !streaming {
+            let msg = currentHudMessage()
+            statusLabel.text = msg.isEmpty ? "Waiting for PC (SteamVR)…" : msg
+        }
+    }
+
     private func setupDecoder() {
         decoder = VideoDecoder()
         decoder?.onFrame = { [weak self] pixelBuffer, _ in
@@ -118,6 +149,7 @@ final class ALVRViewController: UIViewController {
             switch event.tag {
             case ALVR_EVENT_STREAMING_STARTED:
                 isStreaming = true
+                updateStatus(streaming: true)
                 NSLog("[PhoneVR] Streaming started %ux%u @ %.0f Hz",
                       event.payload.STREAMING_STARTED.view_width,
                       event.payload.STREAMING_STARTED.view_height,
@@ -125,6 +157,7 @@ final class ALVRViewController: UIViewController {
 
             case ALVR_EVENT_STREAMING_STOPPED:
                 isStreaming = false
+                updateStatus(streaming: false)
                 NSLog("[PhoneVR] Streaming stopped")
 
             case ALVR_EVENT_DECODER_CONFIG:
@@ -134,7 +167,7 @@ final class ALVRViewController: UIViewController {
                 drainNalQueue(codec: ALVR_CODEC_H264, isConfig: false)
 
             case ALVR_EVENT_HUD_MESSAGE_UPDATED:
-                break
+                updateStatus(streaming: isStreaming)
 
             default:
                 break

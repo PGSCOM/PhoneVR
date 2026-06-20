@@ -39,6 +39,12 @@
     </array>
     <key>NSMotionUsageDescription</key>
     <string>PhoneVR uses the device gyroscope to track head movement for VR rendering.</string>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>PhoneVR connects to your PC running SteamVR over the local network to stream VR video.</string>
+    <key>NSBonjourServices</key>
+    <array>
+        <string>_alvr._tcp</string>
+    </array>
     <key>UIApplicationSupportsIndirectInputEvents</key>
     <true/>
     <key>UIStatusBarHidden</key>
