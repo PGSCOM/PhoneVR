@@ -80,6 +80,7 @@ target_link_libraries(PhoneVR PRIVATE
     "-framework CoreMedia"
     "-framework CoreVideo"
     "-framework AVFoundation"
+    "-framework AudioToolbox"
     "-framework Network"
     "-framework SystemConfiguration"
     "-framework Security"
