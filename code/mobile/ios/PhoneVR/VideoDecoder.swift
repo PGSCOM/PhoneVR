@@ -156,12 +156,13 @@ final class VideoDecoder {
         }
         guard !avcc.isEmpty else { return nil }
 
+        let avccCount = avcc.count
         var blockBuf: CMBlockBuffer?
         var status = avcc.withUnsafeMutableBytes { ptr -> OSStatus in
             CMBlockBufferCreateWithMemoryBlock(
                 allocator: nil, memoryBlock: ptr.baseAddress,
-                blockLength: avcc.count, blockAllocator: kCFAllocatorNull,
-                customBlockSource: nil, offsetToData: 0, dataLength: avcc.count,
+                blockLength: avccCount, blockAllocator: kCFAllocatorNull,
+                customBlockSource: nil, offsetToData: 0, dataLength: avccCount,
                 flags: 0, blockBufferOut: &blockBuf)
         }
         guard status == noErr, let blockBuf else { return nil }
