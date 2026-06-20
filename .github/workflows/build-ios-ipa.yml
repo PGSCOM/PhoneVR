@@ -1,0 +1,196 @@
+# Builds PhoneVR for iOS (arm64) and packages it as an *unsigned* .ipa.
+#
+# The .ipa is NOT code-signed: it can be re-signed afterwards (AltStore,
+# Sideloadly, TrollStore, a manual codesign pass, …) or inspected as a build
+# artifact.
+#
+# Build pipeline:
+#   1. Checkout source + init ALVR submodule.
+#   2. Install Rust + aarch64-apple-ios target.
+#   3. cargo build the ALVR client_core as a static library for iOS arm64.
+#      (build.rs skips C++ compilation on non-Android targets, so no NDK needed.)
+#   4. cmake -G Xcode generates an Xcode project from code/mobile/ios/CMakeLists.txt.
+#   5. xcodebuild archive (CODE_SIGNING_REQUIRED=NO).
+#   6. Zip Payload/<app> → PhoneVR-iOS-unsigned-<sha>.ipa.
+#   7. Upload as workflow artifact (14-day retention).
+
+name: Build iOS IPA (unsigned)
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch / tag / commit to build (default: current branch)"
+        required: false
+        default: ""
+  push:
+    tags:
+      - "ios-ipa-*"
+    branches:
+      - ios
+
+concurrency:
+  group: ios-ipa-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-ipa:
+    name: Build PhoneVR iOS (arm64)
+    runs-on: macos-15          # Apple Silicon; ships Xcode 16+, cmake, git-lfs
+    timeout-minutes: 90
+
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      HOMEBREW_NO_INSTALL_CLEANUP: "1"
+
+    steps:
+      # ── 1. Source ────────────────────────────────────────────────────────────
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+          submodules: false           # fetch only the ALVR submodule below
+
+      - name: Init ALVR submodule
+        run: |
+          set -eux
+          git submodule update --init --depth 1 \
+            code/mobile/android/PhoneVR/ALVR
+
+      # ── 2. Toolchain info ────────────────────────────────────────────────────
+      - name: Show toolchain versions
+        run: |
+          set -eux
+          sw_vers
+          xcodebuild -version
+          cmake --version
+          rustup --version || true
+          df -h /
+
+      # ── 3. Rust + iOS target ─────────────────────────────────────────────────
+      - name: Install Rust stable + iOS cross-compile target
+        run: |
+          set -eux
+          rustup update stable
+          rustup target add aarch64-apple-ios
+
+      # ── 4. Cache cargo registry & build artefacts ────────────────────────────
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: cargo-registry-${{ hashFiles('code/mobile/android/PhoneVR/ALVR/Cargo.lock') }}
+          restore-keys: cargo-registry-
+
+      - name: Cache ALVR build artefacts
+        uses: actions/cache@v4
+        with:
+          path: code/mobile/android/PhoneVR/ALVR/target
+          key: alvr-ios-${{ hashFiles('code/mobile/android/PhoneVR/ALVR/Cargo.lock') }}-${{ github.sha }}
+          restore-keys: |
+            alvr-ios-${{ hashFiles('code/mobile/android/PhoneVR/ALVR/Cargo.lock') }}-
+            alvr-ios-
+
+      # ── 5. Build ALVR client_core static library for iOS ────────────────────
+      - name: Build ALVR client_core (aarch64-apple-ios, release)
+        working-directory: code/mobile/android/PhoneVR/ALVR
+        run: |
+          set -eux
+          # --no-default-features: skips the link-stdcpp-shared flag that would
+          # try to link c++_shared (Android convention); on iOS we link c++ directly.
+          cargo build \
+            --target aarch64-apple-ios \
+            --release \
+            --package alvr_client_core \
+            --no-default-features
+
+          lib="target/aarch64-apple-ios/release/libalvr_client_core.a"
+          test -f "$lib" || { echo "::error::$lib not found"; exit 1; }
+          echo "libalvr_client_core.a: $(du -sh $lib | cut -f1)"
+
+      # ── 6. CMake: generate Xcode project ─────────────────────────────────────
+      - name: Configure CMake (Xcode generator, iOS arm64)
+        run: |
+          set -eux
+          cmake -G Xcode \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
+            -S code/mobile/ios \
+            -B "$RUNNER_TEMP/build_ios"
+
+      # ── 7. Build with xcodebuild ─────────────────────────────────────────────
+      - name: Build (xcodebuild archive, no signing)
+        id: xbuild
+        run: |
+          set -euxo pipefail
+          ARCHIVE="$RUNNER_TEMP/PhoneVR.xcarchive"
+          LOGFILE="$RUNNER_TEMP/xcodebuild.log"
+
+          xcodebuild \
+            -project "$RUNNER_TEMP/build_ios/PhoneVR.xcodeproj" \
+            -scheme PhoneVR \
+            -configuration Release \
+            -destination "generic/platform=iOS" \
+            -archivePath "$ARCHIVE" \
+            ONLY_ACTIVE_ARCH=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_ALLOWED=NO \
+            ENABLE_BITCODE=NO \
+            archive 2>&1 | tee "$LOGFILE"
+
+          test -d "$ARCHIVE" || {
+            echo "::error::Archive not found at $ARCHIVE. Last 50 lines of build log:"
+            tail -50 "$LOGFILE"
+            exit 1
+          }
+          echo "archive=$ARCHIVE" >> "$GITHUB_OUTPUT"
+
+      # ── 8. Package unsigned .ipa ─────────────────────────────────────────────
+      - name: Package unsigned .ipa
+        id: pkg
+        run: |
+          set -eux
+          ARCHIVE="${{ steps.xbuild.outputs.archive }}"
+
+          # Locate the app inside the archive.
+          APP=$(find "$ARCHIVE/Products" -maxdepth 3 -name "*.app" -type d | head -1)
+          test -n "$APP" && test -d "$APP" \
+            || { echo "::error::No .app found under $ARCHIVE/Products"; find "$ARCHIVE" -name "*.app" || true; exit 1; }
+          echo "Bundling: $APP  ($(du -sh "$APP" | cut -f1))"
+
+          # Strip static archives & object files that codesign would reject.
+          find "$APP" -type f \( -name "*.a" -o -name "*.o" \) -delete || true
+
+          # Build Payload/
+          stage="$RUNNER_TEMP/ipa_stage"
+          rm -rf "$stage"
+          mkdir -p "$stage/Payload"
+          cp -R "$APP" "$stage/Payload/"
+
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          IPA_NAME="PhoneVR-iOS-unsigned-${SHORT_SHA}"
+          IPA_PATH="$GITHUB_WORKSPACE/${IPA_NAME}.ipa"
+
+          # -y preserves symlinks inside the bundle.
+          ( cd "$stage" && zip -qry "$IPA_PATH" Payload )
+
+          ls -lh "$IPA_PATH"
+          echo "name=$IPA_NAME"  >> "$GITHUB_OUTPUT"
+          echo "path=$IPA_PATH"  >> "$GITHUB_OUTPUT"
+
+      # ── 9. Upload artifact ───────────────────────────────────────────────────
+      - name: Upload .ipa artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.pkg.outputs.name }}
+          path: ${{ steps.pkg.outputs.path }}
+          if-no-files-found: error
+          retention-days: 14
